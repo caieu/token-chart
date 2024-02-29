@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <head>
+    <title>$ATOM / $NTRN Week Price</title>
+    <style>
+      @keyframes pulse {
+        0% {
+          background-color: #f0f0f0;
+        }
+        50% {
+          background-color: #e0e0e0;
+        }
+        100% {
+          background-color: #f0f0f0;
+        }
+      }
+      *,
+      ::before,
+      ::after {
+        --ring-offset-shadow: 0 0 #0000;
+        --shadow-color: 0 0 #0000;
+        -ring-shadow: 0 0 #0000;
+      }
+      body {
+        background-color: #f0f0f0;
+        font-family: "Courier New", Courier, monospace;
+        margin: 0;
+        width: 100vw;
+        height: 100vh;
+        overflow-x: hidden;
+      }
+      text {
+        font-family: "Courier New", Courier, monospace;
+      }
+      h1 {
+        color: #333;
+      }
+      .page-container {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding-left: 24px;
+        padding-right: 24px;
+      }
+      .info-container {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+      }
+      .shadow-sm {
+        --shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        --shadow-colored: 0 1px 2px 0 var(--shadow-color);
+        box-shadow: var(--ring-offset-shadow, 0 0 #0000),
+          var(--ring-shadow, 0 0 #0000), var(--shadow);
+      }
+      .page-title {
+        font-size: 1.875rem;
+        line-height: 2.25rem;
+        color: rgb(17 24 39);
+        font-weight: 700;
+        margin-top: 24px;
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding-top: 1.25rem;
+        padding-bottom: 1.25rem;
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+        --tw-border-opacity: 1;
+        border-color: rgb(209 213 219 / var(--tw-border-opacity));
+        border-width: 1px;
+        border-radius: 0.5rem;
+        --tw-bg-opacity: 1;
+        background-color: rgb(255 255 255);
+        border-style: solid;
+      }
+      .card-title {
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      .card-value {
+        height: 18px;
+      }
+      .card-value-loading {
+        width: 25%;
+        height: 18px;
+        background-color: #f0f0f0;
+        border-radius: 0.25rem;
+        animation: pulse 2s infinite;
+      }
+      .container-loading {
+        width: 100%;
+        height: 500px;
+        background-color: #f0f0f0;
+        border-radius: 0.25rem;
+        animation: pulse 2s infinite;
+      }
+      .green {
+        color: rgb(34, 197, 94);
+      }
+      .red {
+        color: rgb(220 38 38);
+      }
+      .blue {
+        color: rgb(2 132 199);
+      }
+      .dark-blue {
+        color: rgb(23 37 84);
+      }
+
+      @media screen and (max-width: 768px) {
+        .info-container {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .page-container {
+          padding-left: 8px;
+          padding-right: 8px;
+          gap: 8px;
+        }
+        .page-title {
+          margin-top: 8px;
+        }
+      }
+
+      @media screen and (max-width: 640px) {
+        .info-container {
+          grid-template-columns: repeat(1, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page-container">
+      <div class="page-title">$ATOM / $NTRN</div>
+      <div class="info-container">
+        <div class="card shadow-sm dark-blue">
+          <div class="card-title">Period</div>
+          <div class="card-value">7 days</div>
+        </div>
+        <div class="card shadow-sm blue">
+          <div class="card-title">Average price</div>
+          <div id="avg" class="card-value">
+            <div class="card-value-loading"></div>
+          </div>
+        </div>
+        <div class="card shadow-sm red">
+          <div class="card-title">Minimum price</div>
+          <div id="min" class="card-value">
+            <div class="card-value-loading"></div>
+          </div>
+        </div>
+        <div class="card shadow-sm green">
+          <div class="card-title">Maximum price</div>
+          <div id="max" class="card-value">
+            <div class="card-value-loading"></div>
+          </div>
+        </div>
+      </div>
+      <div class="chart-container">
+        <div id="container"><div class="container-loading"></div></div>
+      </div>
+    </div>
+
+    <script type="module">
+      import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+      let cachedData = null;
+
+      const debounce = (func, wait) => {
+        let timeout;
+        return (...args) => {
+          const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+          };
+          clearTimeout(timeout);
+          timeout = setTimeout(later, wait);
+        };
+      };
+
+      const getUrl = () => {
+        const obj = {
+          json: {
+            tokens: [
+              "ibc/C4CFF46FD6DE35CA4CF4CE031E643C8FDC9BA4B99AE598E9B0ED98FE3A2319F9",
+              "untrn",
+            ],
+            chainId: "neutron-1",
+            dateRange: "D7",
+          },
+        };
+
+        const encoded = encodeURIComponent(JSON.stringify(obj));
+        return `https://app.astroport.fi/api/trpc/charts.prices?input=${encoded}`;
+      };
+
+      const fetchData = async () => {
+        if (cachedData) {
+          return cachedData;
+        }
+        const response = await fetch(getUrl());
+        const {
+          result: {
+            data: { json },
+          },
+        } = await response.json();
+        cachedData = json;
+        return cachedData;
+      };
+
+      const createSvgContainer = (width, height) => {
+        const svgContainer = d3
+          .create("svg")
+          .attr("width", width)
+          .attr("height", height)
+          .attr("viewBox", [0, 0, width, height])
+          .attr("style", "max-width: 100%; height: auto; height: intrinsic;");
+        return svgContainer;
+      };
+
+      const createXAxis = ({
+        svgContainer,
+        series,
+        width,
+        height,
+        marginBottom,
+        marginLeft,
+        marginRight,
+        xTicks,
+        minScreenWidthToRotate,
+      }) => {
+        // Declare the x (horizontal position) scale.
+        const xScale = d3.scaleUtc(
+          d3.extent(series, (d) => new Date(d.time * 1000)),
+          [marginLeft, width - marginRight]
+        );
+
+        // Create the x-axis.
+        const xAxis = svgContainer
+          .append("g")
+          .attr("transform", `translate(0,${height - marginBottom})`)
+          .call(
+            d3
+              .axisBottom(xScale)
+              .ticks(xTicks)
+              .tickSizeOuter(0)
+              .ticks(d3.timeDay.every(1))
+              .tickFormat(d3.timeFormat("%m/%d/%Y"))
+          );
+
+        // Rotate the x-axis ticks if the screen width is less than a certain value.
+        if (window.innerWidth < minScreenWidthToRotate) {
+          xAxis
+            .selectAll("text")
+            .style("text-anchor", "end")
+            .attr("dx", "-.8em")
+            .attr("dy", ".15em")
+            .attr("transform", "rotate(-65)");
+        }
+
+        return { xAxis, xScale };
+      };
+
+      const createYAxis = ({
+        svgContainer,
+        series,
+        width,
+        height,
+        marginTop,
+        marginBottom,
+        marginLeft,
+        marginRight,
+        yTicks,
+      }) => {
+        // Declare the y (vertical position) scale.
+        const yScale = d3.scaleLinear(
+          [d3.min(series, (d) => d.value), d3.max(series, (d) => d.value)],
+          [height - marginBottom, marginTop]
+        );
+
+        // Add the y-axis.
+        const yAxis = svgContainer
+          .append("g")
+          .attr("transform", `translate(${marginLeft},0)`)
+          .call(d3.axisLeft(yScale).ticks(yTicks))
+          .call((g) => g.select(".domain").remove())
+          .call((g) =>
+            g
+              .selectAll(".tick line")
+              .clone()
+              .attr("x2", width - marginLeft - marginRight)
+              .attr("stroke-opacity", 0.1)
+          )
+          .call((g) =>
+            g
+              .append("text")
+              .attr("x", -marginLeft)
+              .attr("y", 10)
+              .attr("fill", "currentColor")
+              .attr("text-anchor", "start")
+              .attr("font-weight", "bold")
+              .text("↑ Price ($)")
+          );
+
+        return { yAxis, yScale };
+      };
+
+      const createLineSeries = ({ series, svgContainer, xScale, yScale }) => {
+        // Declare the line generator.
+        const line = d3
+          .line()
+          .x((d) => xScale(new Date(d.time * 1000)))
+          .y((d) => yScale(d.value));
+
+        // Append a circle for each data point in the series.
+        svgContainer
+          .selectAll("circle")
+          .data(series)
+          .enter()
+          .append("circle")
+          .attr("cx", (d) => xScale(new Date(d.time * 1000)))
+          .attr("cy", (d) => yScale(d.value))
+          .attr("r", 3);
+
+        // Append a path for the line.
+        svgContainer
+          .append("path")
+          .attr("fill", "none")
+          .attr("stroke", "steelblue")
+          .attr("stroke-width", 1.5)
+          .attr("d", line(series));
+
+        return line;
+      };
+
+      const createTooltip = ({
+        svgContainer,
+        height,
+        marginLeft,
+        xScale,
+        series,
+      }) => {
+        // Create a tooltip div.
+        const tooltip = d3
+          .select("body")
+          .append("div")
+          .attr("class", "card tooltip")
+          .style("position", "absolute")
+          .style("padding", "8px")
+          .style("display", "none");
+
+        // Append a line to the SVG container.
+        const verticalLine = svgContainer
+          .append("line")
+          .attr("stroke", "black")
+          .attr("stroke-dasharray", "4")
+          .attr("y1", 0)
+          .attr("y2", height)
+          .style("display", "none");
+
+        // Define the bisector function.
+        const bisectDate = d3.bisector((d) => new Date(d.time * 1000)).left;
+
+        // Add a mousemove event to the SVG container.
+        svgContainer.on("mousemove", (event) => {
+          // Get the current mouse position.
+          const mouseX = d3.pointer(event, this)[0] - marginLeft / 2.5;
+
+          // Convert the mouse position to a date.
+          const mouseDate = xScale.invert(mouseX);
+
+          // Use the bisector function to find the closest data point.
+          const i = bisectDate(series, mouseDate, 1);
+          const d0 = series[i - 1];
+          const d1 = series[i];
+
+          if (d0 && d1) {
+            const d =
+              mouseX < marginLeft
+                ? d0
+                : mouseDate - d0.time > d1.time - mouseDate
+                ? d1
+                : d0;
+
+            // Show the tooltip at the cursor position and set its text to the data value.
+            tooltip
+              .style("display", "inline")
+              .html(
+                `<b>Price:</b> $${d.value}<br><b>Date</b>: ${new Date(
+                  d.time * 1000
+                ).toLocaleString()}`
+              );
+
+            // Show the vertical line at the x position of the closest data point.
+            verticalLine
+              .attr("x1", xScale(new Date(d.time * 1000)))
+              .attr("x2", xScale(new Date(d.time * 1000)))
+              .style("display", "inline");
+          }
+
+          // Get the dimensions of the tooltip.
+          const tooltipDimensions = tooltip.node().getBoundingClientRect();
+
+          // Calculate the left and top positions.
+          let left = event.pageX + 20;
+          let top = event.pageY - 28;
+
+          // Adjust the left position if the tooltip overflows the right edge of the screen.
+          if (left + tooltipDimensions.width > window.innerWidth) {
+            left = event.pageX - tooltipDimensions.width - 20;
+          }
+
+          // Set the left and top positions of the tooltip.
+          tooltip.style("left", `${left}px`).style("top", `${top}px`);
+        });
+
+        // Add a mouseout event to the SVG container to hide the tooltip and the vertical line.
+        svgContainer.on("mouseout", () => {
+          tooltip.style("display", "none");
+          verticalLine.style("display", "none");
+        });
+
+        return { tooltip, verticalLine };
+      };
+
+      const buildChart = (series) => {
+        const containerDiv = d3.select("#container");
+        const width = containerDiv.node().getBoundingClientRect().width;
+        const height = 500;
+        const marginTop = 20;
+        const marginRight = 3;
+        const marginBottom = 80;
+        const marginLeft = 40;
+        const xTicks = 7;
+        const yTicks = 10;
+        const minScreenWidthToRotate = 640;
+
+        const svgContainer = createSvgContainer(width, height);
+
+        const { xScale } = createXAxis({
+          svgContainer,
+          series,
+          width,
+          height,
+          marginBottom,
+          marginLeft,
+          marginRight,
+          xTicks,
+          minScreenWidthToRotate,
+        });
+
+        const { yScale } = createYAxis({
+          svgContainer,
+          series,
+          width,
+          height,
+          marginTop,
+          marginBottom,
+          marginLeft,
+          marginRight,
+          yTicks,
+        });
+
+        createLineSeries({ series, svgContainer, xScale, yScale });
+
+        createTooltip({
+          height: height - marginBottom,
+          svgContainer,
+          marginLeft,
+          xScale,
+          series,
+        });
+
+        container.innerHTML = "";
+        container.append(svgContainer.node());
+      };
+
+      const initScreen = async () => {
+        // Fetch data from the API.
+        const data = await fetchData();
+        const {
+          untrn: { series, minValue, maxValue },
+        } = data;
+
+        // Get the y domain to calculate the average.
+        const yDomain = series.map((item) => item.value);
+        const average = parseFloat(
+          (
+            yDomain.reduce((sum, value) => sum + value, 0) / yDomain.length
+          ).toFixed(2)
+        );
+
+        // Update the card values.
+        min.innerHTML = `$${minValue}`;
+        max.innerHTML = `$${maxValue}`;
+        avg.innerHTML = `$${average}`;
+
+        buildChart(series);
+      };
+
+      initScreen();
+
+      // Add a resize event listener to the window.
+      window.addEventListener(
+        "resize",
+        debounce(() => {
+          // Remove the old chart and tooltips.
+          d3.select("#container svg").remove();
+          d3.selectAll("div.tooltip").remove();
+
+          //Build chart again.
+          initScreen();
+        }, 250)
+      ); // Debounce time in milliseconds.
+    </script>
+  </body>
+</html>
